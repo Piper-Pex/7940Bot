@@ -107,25 +107,47 @@ async def _process_matching(update: Update, user_id: str, interests: list):
         await update.message.reply_text("暂时没有找到匹配的玩家，我们会继续为您关注！")
 
 async def _generate_match_reason(base_interests: list, match: dict) -> str:
-    """生成匹配原因描述"""
-    
+    """生成匹配原因描述（修复数据结构问题）"""
     try:
-        candidate_interests = match["user"]["interests"]
+        # 修复数据结构访问问题
+        candidate_interests = match.get("interests", [])  # 直接访问interests字段
+        
+        # 验证输入有效性
+        if not base_interests or not candidate_interests:
+            return "基于双方游戏兴趣的相似性推荐"
+        
+        # 构造更明确的提示词
+        system_prompt = f"""你是一个专业的游戏匹配分析师。请根据以下游戏兴趣列表，用1句话说明匹配原因：
+        我的兴趣：{', '.join(base_interests[:5])}（最多展示5个）
+        对方兴趣：{', '.join(candidate_interests[:5])}（最多展示5个）
+        分析角度：游戏类型、玩法机制、用户画像、流行趋势等
+        输出要求：用口语化中文，不超过20个字"""
+        
+        # 添加API调用保护
         response = openai_client.chat.completions.create(
-            model="gpt-4o-mini",
+            model="gpt-3.5-turbo",  # 确认可用模型
             messages=[{
                 "role": "system",
-                "content": (
-                    "你是一个游戏推荐助手。请用1句话说明为什么这些游戏兴趣可能匹配：\n"
-                    f"我的兴趣：{', '.join(base_interests)}\n"
-                    f"对方兴趣：{', '.join(candidate_interests)}"
-                )
+                "content": system_prompt
             }],
-            temperature=0.5
+            temperature=0.7,
+            max_tokens=50,
+            timeout=10  # 添加超时设置
         )
+        
+        # 处理空响应
+        if not response.choices[0].message.content:
+            raise ValueError("OpenAI返回空内容")
+            
         return response.choices[0].message.content.strip()
-    except:
+        
+    except KeyError as e:
+        print(f"数据结构错误: {str(e)}")
+        return "发现共同的游戏兴趣"
+    except Exception as e:
+        print(f"推荐理由生成失败: {str(e)}")
         return "这些游戏可能有相似的玩法特点"
+
 
 def main():
     """启动机器人"""

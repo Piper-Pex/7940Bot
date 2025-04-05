@@ -155,10 +155,10 @@ async def analyze_game_pair(game1: str, game2: str) -> float:
         return 0.0
 
 async def find_matching_users(user_id: str, interests: List[str], threshold: float = 0.6) -> List[Dict]:
-    """查找跨游戏匹配用户"""
+    """查找跨游戏匹配用户（修复参数传递问题）"""
     conn = _get_connection()
     try:
-        # 获取候选用户
+        # 获取候选用户（修复字段名匹配问题）
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT user_id, username, interests 
@@ -166,48 +166,70 @@ async def find_matching_users(user_id: str, interests: List[str], threshold: flo
                 WHERE user_id != %s 
                 AND last_active > NOW() - INTERVAL '7 days'
             """, (str(user_id),))
-            candidates = cur.fetchall()
+            candidates = [dict(row) for row in cur.fetchall()]  # 转换为字典
 
-        # 并行计算相似度
-        tasks = []
-        for candidate in candidates:
-            tasks.append(_calculate_user_similarity(interests, candidate["interests"], candidate))
+        # 修复参数传递（移除冗余参数）
+        tasks = [
+            _calculate_user_similarity(
+                base_interests=interests,  # 使用正确参数名
+                candidate_data=candidate   # 只传必要参数
+            )
+            for candidate in candidates
+        ]
         
         results = await asyncio.gather(*tasks)
         
-        # 筛选和排序结果
-        matches = [res for res in results if res["score"] >= threshold]
-        return sorted(matches, key=lambda x: x["score"], reverse=True)[:10]
+        # 筛选和排序结果（添加类型检查）
+        valid_results = [
+            res for res in results 
+            if isinstance(res, dict) and res.get("score", 0) >= threshold
+        ]
+        return sorted(valid_results, key=lambda x: x["score"], reverse=True)[:10]
     finally:
         conn.close()
 
-async def _calculate_user_similarity(base_interests, candidate_interests, candidate_data):
-    """计算用户相似度得分"""
-    total = 0.0
-    valid_pairs = 0
+
+async def _calculate_user_similarity(base_interests: List[str], candidate_data: dict) -> dict:
+    """计算用户相似度得分（安全字段处理）"""
+    # 安全获取兴趣数据
+    raw_interests = candidate_data.get("interests", [])
     
-    # 精确匹配直接加分
+    # 处理 PostgreSQL 数组格式
+    if isinstance(raw_interests, str):
+        candidate_interests = [i.strip() for i in raw_interests.strip('{}').split(',')]
+    elif isinstance(raw_interests, list):
+        candidate_interests = raw_interests
+    else:
+        candidate_interests = []
+
+    # 精确匹配计算
     common = set(base_interests) & set(candidate_interests)
-    total += len(common) * 1.0
-    valid_pairs += len(common)
+    total = len(common) * 1.0
+    valid_pairs = len(common)
     
-    # 跨游戏匹配
-    base_remain = [g for g in base_interests if g not in common]
-    candidate_remain = [g for g in candidate_interests if g not in common]
-    
-    for g1 in base_remain:
-        for g2 in candidate_remain:
-            similarity = await analyze_game_pair(g1, g2)
-            if similarity >= 0.4:
-                total += similarity
-                valid_pairs += 1
-    
+    # 跨游戏匹配（添加空值保护）
+    try:
+        base_remain = [g for g in base_interests if g not in common]
+        candidate_remain = [g for g in candidate_interests if g not in common]
+        
+        for g1 in base_remain:
+            for g2 in candidate_remain:
+                similarity = await analyze_game_pair(g1, g2)
+                if similarity and similarity >= 0.4:
+                    total += similarity
+                    valid_pairs += 1
+    except Exception as e:
+        print(f"匹配计算异常: {str(e)}")
+
+    # 安全计算得分
     score = total / valid_pairs if valid_pairs > 0 else 0.0
     return {
-        "user_id": candidate_data["user_id"],
-        "username": candidate_data["username"],
+        "user_id": candidate_data.get("user_id", ""),
+        "username": candidate_data.get("username", "未知用户"),
         "score": round(score, 2),
-        "common_games": list(common)
+        "common_games": list(common),
+        "interests": candidate_interests  # 返回处理后的兴趣列表
     }
+
 
 openai_client = client 
