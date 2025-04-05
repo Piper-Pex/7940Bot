@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: my-python-app
+    env: docker
+    plan: free
+    region: singapore
+    dockerfilePath: Dockerfile
+    envVars:
+      - key: DATABASE_URL
+        sync: false  # 表示此变量需在控制台手动设置
+      - key: TELEGRAM_TOKEN
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
