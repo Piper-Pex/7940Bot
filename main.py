@@ -1,78 +1,147 @@
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters
-from database import save_user_interests, find_matching_users
+# main.py
 import os
-from openai import OpenAI
+from telegram import Update
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    MessageHandler,
+    filters,
+    ContextTypes
+)
+from database import (
+    save_user_interests,
+    find_matching_users,
+    openai_client
+)
 from dotenv import load_dotenv
 
-# Load environment variables
+# 加载环境变量
 load_dotenv()
 
-# Initialize OpenAI client
-client = OpenAI(
-    api_key="sk-13DJKXp6QBphm8MaRbUwOiwRmx9E2qwW6lf9dMP30eEeqyXJ",
-    base_url="https://api.deerapi.com/v1"
-)
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """处理 /start 命令"""
+    welcome_msg = (
+        "🎮 欢迎来到游戏伙伴匹配机器人！\n\n"
+        "请告诉我你喜欢的游戏或游戏类型，例如：\n"
+        "· 我喜欢原神和王者荣耀\n"
+        "· 我常玩生存恐怖类和开放世界游戏\n"
+        "· 最近在玩艾尔登法环和星露谷物语"
+    )
+    await update.message.reply_text(welcome_msg)
 
-async def start(update, context):
-    """Handle the /start command"""
-    await update.message.reply_text("Welcome! Please tell me your favorite game genres, e.g., 'I like Genshin Impact and Honor of Kings'.")
-
-async def handle_message(update, context):
-    """Process user messages"""
-    user_id = update.message.from_user.id
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """处理用户消息"""
+    user = update.message.from_user
+    user_id = str(user.id)
+    username = user.username or user.first_name or "匿名玩家"
     user_input = update.message.text
 
-    # Get username
-    user = update.message.from_user
-    username = user.username or user.first_name or "Anonymous User"
-
-    # Call ChatGPT to extract interest keywords
     try:
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": "You are an interest extraction assistant. Extract game-related interest keywords from user messages, separated by commas."},
-                {"role": "user", "content": f"Extract interest keywords: {user_input}"}
-            ]
-        )
-        raw_interests = response.choices[0].message.content.strip()
-        interests = [x.strip() for x in raw_interests.split(",") if x.strip()]
-        
-        if not interests:
-            await update.message.reply_text("No interest keywords detected. Please try again.")
+        # 第一步：提取兴趣关键词
+        raw_interests = await _extract_interests(user_input)
+        if not raw_interests:
+            await update.message.reply_text("⚠️ 没有识别到有效的游戏兴趣，请尝试更具体的描述（如游戏名称或类型）")
             return
 
-    except Exception as e:
-        print(f"ChatGPT API call failed: {e}")
-        await update.message.reply_text("Service temporarily unavailable. Please try again later.")
-        return
+        # 第二步：保存到数据库
+        if not save_user_interests(user_id, username, raw_interests):
+            await update.message.reply_text("❌ 保存兴趣失败，请稍后再试")
+            return
 
-    # Save user interests to database
-    if save_user_interests(user_id, username, interests):
-        await update.message.reply_text(f"Your interests have been recorded: {', '.join(interests)}! Searching for matching players...")
-        matches = find_matching_users(user_id, interests)
-        if matches:
-            match_list = "\n".join(
-                [f"User {user['username']} (Interests: {', '.join(user['interests'])})" 
-                 for user in matches]
+        # 第三步：查找匹配
+        await _process_matching(update, user_id, raw_interests)
+
+    except Exception as e:
+        print(f"处理消息时出错: {e}")
+        await update.message.reply_text("🌀 服务暂时不可用，请稍后再试")
+
+async def _extract_interests(text: str) -> list:
+    """调用OpenAI提取兴趣关键词"""
+
+    response = openai_client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "你是一个游戏兴趣提取助手。请从用户消息中提取游戏或游戏类型关键词，"
+                    "用中文逗号分隔。只返回关键词，不要解释。\n"
+                    "示例输入：'我喜欢玩原神和王者荣耀'\n"
+                    "示例输出：原神, 王者荣耀"
+                )
+            },
+            {"role": "user", "content": text}
+        ],
+        temperature=0.3
+    )
+    
+    raw = response.choices[0].message.content.strip()
+    return [x.strip() for x in raw.split(",") if x.strip()]
+
+async def _process_matching(update: Update, user_id: str, interests: list):
+    """处理匹配流程"""
+    # 精确匹配
+    exact_matches = await find_matching_users(user_id, interests)
+    if exact_matches:
+        match_list = "\n".join(
+            [f"· {user['username']} （共同兴趣：{', '.join(user['interests'])}）"
+             for user in exact_matches[:3]]  # 显示前3个
+        )
+        await update.message.reply_text(
+            f"🎉 找到{len(exact_matches)}位兴趣相同的玩家：\n{match_list}"
+        )
+
+    # 跨游戏匹配
+    cross_matches = await find_matching_users(user_id, interests)
+    if cross_matches:
+        for match in cross_matches[:3]:  # 显示前3个
+            common = match["common_games"]
+            msg = (
+                f"🌟 推荐玩家：{match['username']}\n"
+                f"📈 匹配度：{match['score']*100:.0f}%\n"
+                f"🎮 共同游戏：{', '.join(common) if common else '暂无'}\n"
+                f"💡 推荐理由：{await _generate_match_reason(interests, match)}"
             )
-            await update.message.reply_text(f"Found matching players:\n{match_list}")
-        else:
-            await update.message.reply_text("No matching players found at the moment.")
-    else:
-        await update.message.reply_text("Failed to save interests. Please try again.")
+            await update.message.reply_text(msg)
+    elif not exact_matches:
+        await update.message.reply_text("暂时没有找到匹配的玩家，我们会继续为您关注！")
+
+async def _generate_match_reason(base_interests: list, match: dict) -> str:
+    """生成匹配原因描述"""
+    
+    try:
+        candidate_interests = match["user"]["interests"]
+        response = openai_client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{
+                "role": "system",
+                "content": (
+                    "你是一个游戏推荐助手。请用1句话说明为什么这些游戏兴趣可能匹配：\n"
+                    f"我的兴趣：{', '.join(base_interests)}\n"
+                    f"对方兴趣：{', '.join(candidate_interests)}"
+                )
+            }],
+            temperature=0.5
+        )
+        return response.choices[0].message.content.strip()
+    except:
+        return "这些游戏可能有相似的玩法特点"
 
 def main():
-    """Start the bot"""
-    # Initialize application with ApplicationBuilder
-    application = ApplicationBuilder().token(os.getenv("TELEGRAM_TOKEN")).build()
+    """启动机器人"""
+    # 初始化应用
+    app = ApplicationBuilder() \
+        .token(os.getenv("TELEGRAM_TOKEN")) \
+        .concurrent_updates(True) \
+        .build()
 
-    # Add handlers
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(MessageHandler(filters.TEXT, handle_message))
+    # 注册处理器
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    # Start polling
-    application.run_polling()
+    # 启动轮询
+    print("🤖 机器人已启动...")
+    app.run_polling()
 
 if __name__ == "__main__":
     main()
