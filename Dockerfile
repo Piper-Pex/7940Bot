@@ -19,4 +19,4 @@ COPY . .
 ENV PATH=/root/.local/bin:$PATH
 ENV CONFIG_PATH=config/secrets/.prod.env
 
-CMD ["python", "main.py"]
+CMD ["gunicorn", "--bind", "0.0.0.0:${PORT}", "--worker-class", "uvicorn.workers.UvicornWorker", "main:app"]
