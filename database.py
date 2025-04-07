@@ -1,4 +1,3 @@
-# database.py 修改版
 import os
 import psycopg2
 from psycopg2.extras import RealDictCursor
@@ -7,34 +6,34 @@ from openai import OpenAI
 from typing import List, Dict
 import asyncio
 
-# 加载环境变量
+# Load environment variables
 load_dotenv()
 
-# 初始化OpenAI客户端
+# Initialize OpenAI client
 client = OpenAI(
     api_key="sk-13DJKXp6QBphm8MaRbUwOiwRmx9E2qwW6lf9dMP30eEeqyXJ",
-    base_url="https://api.deerapi.com/v1"
+    base_url="<a href="https://api.deerapi.com/v1"" class="underline" target="_blank">Click this URL</a>
 )
 
-# 数据库连接池
+# Database connection pool
 def _get_connection():
-    """获取数据库连接（适配Heroku）"""
+    """Get database connection (adapted for Heroku)"""
     try:
         return psycopg2.connect(
             dsn=os.getenv("DATABASE_URL"),
             cursor_factory=RealDictCursor,
-            sslmode='require'  # 强制SSL
+            sslmode='require'  # Enforce SSL
         )
     except Exception as e:
-        print(f"连接失败: {e}")
+        print(f"Connection failed: {e}")
         return None
 
 def _create_tables():
-    """初始化数据库表结构"""
+    """Initialize database table structure"""
     conn = _get_connection()
     try:
         with conn.cursor() as cur:
-            # 用户表
+            # Users table
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS new_users (
                     user_id VARCHAR(255) PRIMARY KEY,
@@ -44,7 +43,7 @@ def _create_tables():
                 )
             """)
             
-            # 游戏相似度缓存表
+            # Game similarity cache table
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS game_similarities (
                     game1 VARCHAR(255),
@@ -54,23 +53,23 @@ def _create_tables():
                  )
             """)
             
-            # 创建索引
+            # Create index
             cur.execute("""
                 CREATE INDEX IF NOT EXISTS idx_interests 
                 ON new_users USING GIN (interests)
             """)
             conn.commit()
     except Exception as e:
-        print(f"表创建失败: {e}")
+        print(f"Table creation failed: {e}")
         conn.rollback()
     finally:
         conn.close()
 
-# 初始化时创建表
+# Create tables at initialization
 _create_tables()
 
 def save_user_interests(user_id, username, interests):
-    """保存用户兴趣（带最后活跃时间）"""
+    """Save user interests (with last active time)"""
     conn = _get_connection()
     if not conn:
         return False
@@ -88,14 +87,14 @@ def save_user_interests(user_id, username, interests):
             conn.commit()
             return True
     except Exception as e:
-        print(f"保存用户兴趣失败: {e}")
+        print(f"Failed to save user interests: {e}")
         conn.rollback()
         return False
     finally:
         conn.close()
 
 def _get_cached_similarity(game1, game2):
-    """从数据库获取缓存的相似度"""
+    """Get cached similarity from the database"""
     conn = _get_connection()
     try:
         with conn.cursor() as cur:
@@ -110,9 +109,9 @@ def _get_cached_similarity(game1, game2):
     finally:
         conn.close()
 
-# 修改缓存写入方式（避免异步任务未完成时连接关闭）
+# Modify cache writing method (avoid closing connection while async task is incomplete)
 async def _cache_similarity(game1, game2, similarity):
-    """异步安全版缓存"""
+    """Async safe caching"""
     try:
         with psycopg2.connect(os.getenv("DATABASE_URL"), sslmode='require') as conn:
             with conn.cursor() as cur:
@@ -123,42 +122,42 @@ async def _cache_similarity(game1, game2, similarity):
                 """, (game1, game2, similarity))
                 conn.commit()
     except Exception as e:
-        print(f"缓存写入失败: {e}")
+        print(f"Cache writing failed: {e}")
 
 async def analyze_game_pair(game1: str, game2: str) -> float:
-    """分析游戏相似度（带缓存机制）"""
-    # 优先读取缓存
+    """Analyze game similarity (with caching mechanism)"""
+    # Prioritize reading from cache
     cached = _get_cached_similarity(game1, game2)
     if cached is not None:
         return cached
 
-    # 调用OpenAI API
+    # Call OpenAI API
     try:
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[{
                 "role": "system",
-                "content": "你是一个游戏分析专家，请评估以下两个游戏的相似度（0-1），考虑类型、玩法、画风等因素，直接返回数字"
+                "content": "You are a game analysis expert. Please evaluate the similarity (0-1) of the following two games, considering type, gameplay, art style, etc., and return the number directly."
             }, {
                 "role": "user",
-                "content": f"《{game1}》和《{game2}》的相似度分数是："
+                "content": f"The similarity score between '{game1}' and '{game2}' is:"
             }],
             temperature=0.2
         )
         similarity = max(0.0, min(1.0, float(response.choices[0].message.content.strip())))
         
-        # 异步缓存结果
+        # Asynchronously cache the result
         asyncio.create_task(_cache_similarity(game1, game2, similarity))
         return similarity
     except Exception as e:
-        print(f"游戏相似度分析失败: {e}")
+        print(f"Game similarity analysis failed: {e}")
         return 0.0
 
 async def find_matching_users(user_id: str, interests: List[str], threshold: float = 0.6) -> List[Dict]:
-    """查找跨游戏匹配用户（修复参数传递问题）"""
+    """Find cross-game matching users (fix parameter passing issue)"""
     conn = _get_connection()
     try:
-        # 获取候选用户（修复字段名匹配问题）
+        # Get candidate users (fix field name matching issue)
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT user_id, username, interests 
@@ -166,20 +165,20 @@ async def find_matching_users(user_id: str, interests: List[str], threshold: flo
                 WHERE user_id != %s 
                 AND last_active > NOW() - INTERVAL '7 days'
             """, (str(user_id),))
-            candidates = [dict(row) for row in cur.fetchall()]  # 转换为字典
+            candidates = [dict(row) for row in cur.fetchall()]  # Convert to dictionary
 
-        # 修复参数传递（移除冗余参数）
+        # Fix parameter passing (remove redundant parameters)
         tasks = [
             _calculate_user_similarity(
-                base_interests=interests,  # 使用正确参数名
-                candidate_data=candidate   # 只传必要参数
+                base_interests=interests,  # Use correct parameter name
+                candidate_data=candidate   # Pass only necessary parameters
             )
             for candidate in candidates
         ]
         
         results = await asyncio.gather(*tasks)
         
-        # 筛选和排序结果（添加类型检查）
+        # Filter and sort results (add type checking)
         valid_results = [
             res for res in results 
             if isinstance(res, dict) and res.get("score", 0) >= threshold
@@ -190,11 +189,11 @@ async def find_matching_users(user_id: str, interests: List[str], threshold: flo
 
 
 async def _calculate_user_similarity(base_interests: List[str], candidate_data: dict) -> dict:
-    """计算用户相似度得分（安全字段处理）"""
-    # 安全获取兴趣数据
+    """Calculate user similarity score (safe field handling)"""
+    # Safely get interest data
     raw_interests = candidate_data.get("interests", [])
     
-    # 处理 PostgreSQL 数组格式
+    # Handle PostgreSQL array format
     if isinstance(raw_interests, str):
         candidate_interests = [i.strip() for i in raw_interests.strip('{}').split(',')]
     elif isinstance(raw_interests, list):
@@ -202,12 +201,12 @@ async def _calculate_user_similarity(base_interests: List[str], candidate_data: 
     else:
         candidate_interests = []
 
-    # 精确匹配计算
+    # Exact match calculation
     common = set(base_interests) & set(candidate_interests)
     total = len(common) * 1.0
     valid_pairs = len(common)
     
-    # 跨游戏匹配（添加空值保护）
+    # Cross-game matching (add null value protection)
     try:
         base_remain = [g for g in base_interests if g not in common]
         candidate_remain = [g for g in candidate_interests if g not in common]
@@ -219,17 +218,16 @@ async def _calculate_user_similarity(base_interests: List[str], candidate_data: 
                     total += similarity
                     valid_pairs += 1
     except Exception as e:
-        print(f"匹配计算异常: {str(e)}")
+        print(f"Matching calculation exception: {str(e)}")
 
-    # 安全计算得分
+    # Safely calculate score
     score = total / valid_pairs if valid_pairs > 0 else 0.0
     return {
         "user_id": candidate_data.get("user_id", ""),
-        "username": candidate_data.get("username", "未知用户"),
+        "username": candidate_data.get("username", "Unknown User"),
         "score": round(score, 2),
         "common_games": list(common),
-        "interests": candidate_interests  # 返回处理后的兴趣列表
+        "interests": candidate_interests  # Return processed interest list
     }
 
-
-openai_client = client 
+openai_client = client
