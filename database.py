@@ -12,7 +12,7 @@ load_dotenv()
 # Initialize OpenAI client
 client = OpenAI(
     api_key="sk-13DJKXp6QBphm8MaRbUwOiwRmx9E2qwW6lf9dMP30eEeqyXJ",
-    base_url="<a href="https://api.deerapi.com/v1"" class="underline" target="_blank">Click this URL</a>
+    base_url="https://api.deerapi.com/v1"
 )
 
 # Database connection pool
